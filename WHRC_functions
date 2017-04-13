@@ -1,0 +1,207 @@
+## Processing global layers for soil organic carbon assessment
+
+predict_PVG_tiles <- function(i, gm, tile.tbl, covs, levs, method="ranger", out.path="/data/WHRC_soilcarbon/model10km/tiled", lc1="/data/WHRC_soilcarbon/model10km/stacked1km/ESACCI-LC-L4-LCCS-Map-300m-P5Y-2010-v1.6.1_1km.tif", des="/data/WHRC_soilcarbon/model10km/stacked1km/desertPR_sin_1km.tif", pvg.m){
+  out.tifs <- gsub("-", ".", paste0(out.path, "/T", tile.tbl[i,"ID"], "/", normalizeFilename(levs, sub.sign = "."), "_T", tile.tbl[i,"ID"], ".tif"))
+  if(any(!file.exists(out.tifs))){
+    m = readGDAL(fname=lc1, offset=unlist(tile.tbl[i,c("offset.y","offset.x")]), region.dim=unlist(tile.tbl[i,c("region.dim.y","region.dim.x")]), output.dim=unlist(tile.tbl[i,c("region.dim.y","region.dim.x")]), silent = TRUE)
+    names(m) = "landcover"
+    m$desert = readGDAL(des, offset=unlist(tile.tbl[i,c("offset.y","offset.x")]), region.dim=unlist(tile.tbl[i,c("region.dim.y","region.dim.x")]), output.dim=unlist(tile.tbl[i,c("region.dim.y","region.dim.x")]), silent = TRUE)$band1
+    m$desert = ifelse(is.na(m$desert), 0, m$desert)
+    ## NO need to predict for permanent snow / shifting sands:
+    m = as(m, "SpatialPixelsDataFrame")
+    sel.p = !(m$landcover==220 | m$landcover==210 | m$desert==1)
+    if(sum(sel.p)>2){
+      m = m[sel.p,]
+      for(j in 1:length(covs)){
+        cname = gsub("_1km", "", gsub("-", "_", file_path_sans_ext(basename(covs[j]))))
+        m@data[,cname] <- signif(readGDAL(covs[j], offset=unlist(tile.tbl[i,c("offset.y","offset.x")]), region.dim=unlist(tile.tbl[i,c("region.dim.y","region.dim.x")]), output.dim=unlist(tile.tbl[i,c("region.dim.y","region.dim.x")]), silent = TRUE)$band1[m@grid.index], 4)
+      }
+      ## Fill-in missing values (if necessary):
+      sel.mis = sapply(m@data, function(x){sum(is.na(x))>0})
+      if(sum(sel.mis)>0){
+        for(j in which(sel.mis)){
+          if(length(grep(pattern="USG5", names(m)[j]))>0){ 
+            repn = 0 
+          } else {
+            repn = quantile(m@data[,j], probs=.5, na.rm=TRUE)
+            if(is.na(repn)){
+              repn = quantile(pvg.m[,names(m)[j]], probs=.5, na.rm=TRUE)
+            }
+          }
+          m@data[,j] = ifelse(is.na(m@data[,j]), repn, m@data[,j])
+        }
+      }
+      ## predict:
+      if(method=="ranger"){
+        m@data = data.frame(predict(gm, m@data, num.threads=1)$predictions)
+        #plot(stack(m[6:8]), zlim=c(0,.35), col=SAGA_pal[[1]])
+        for(j in 1:ncol(m)){
+          out.tif <- paste0(out.path, "/T", tile.tbl[i,"ID"], "/", names(m)[j], "_T", tile.tbl[i,"ID"], ".tif")
+          m@data[,j] <- round(m@data[,j]*100)
+          writeGDAL(m[j], out.tif, type="Byte", mvFlag=255, options="COMPRESS=DEFLATE")
+        }
+        ## match most probable class
+        m$cl <- apply(m@data,1,which.max)
+        writeGDAL(m["cl"], paste0(out.path, "/T", tile.tbl[i,"ID"], "/PVGcl_T", tile.tbl[i,"ID"], ".tif"), type="Byte", mvFlag=255, options="COMPRESS=DEFLATE", catNames=list(gm$forest$levels))
+      }
+      ## Save output:
+      saveRDS(m, file=paste0(out.path, "/T", tile.tbl[i,"ID"], "/m_T", tile.tbl[i,"ID"], ".rds"))
+      gc()
+    }
+  }
+}
+
+## Predict SOCS using 2 models:
+predict_SOCS_tiles <- function(i, tile.tbl, varn, n.tif, out.path="/data/WHRC_soilcarbon/model10km/tiled", gmF, gmX, from.tile=TRUE, lc.class=NULL, lc.name="ESACCI_LC_L4_LCCS_Map_300m_P5Y_2010_v1.6.1", gmF.w=.5, gmX.w=.5, lc1="/data/WHRC_soilcarbon/model10km/stacked1km/ESACCI-LC-L4-LCCS-Map-300m-P5Y-2010-v1.6.1_1km.tif", des="/data/WHRC_soilcarbon/model10km/stacked1km/desertPR_sin_1km.tif", reg.m){
+  out.tif <- paste0(out.path, "/T", tile.tbl[i,"ID"], "/", varn, "_T", tile.tbl[i,"ID"], ".tif")
+  if(!file.exists(out.tif)){
+    if(from.tile==TRUE){
+      m = readGDAL(paste0(out.path, "/T", tile.tbl[i,"ID"], "/", strsplit(basename(n.tif[1]),"_")[[1]][3], "_T", tile.tbl[i,"ID"], ".tif"), silent = TRUE)
+      m = as(m, "SpatialPixelsDataFrame")
+      names(m) = file_path_sans_ext(basename(n.tif[1]))
+    } else {
+      m = readGDAL(fname=lc1, offset=unlist(tile.tbl[i,c("offset.y","offset.x")]), region.dim=unlist(tile.tbl[i,c("region.dim.y","region.dim.x")]), output.dim=unlist(tile.tbl[i,c("region.dim.y","region.dim.x")]), silent = TRUE)
+      names(m) = "landcover"
+      m$desert = readGDAL(fname=des, offset=unlist(tile.tbl[i,c("offset.y","offset.x")]), region.dim=unlist(tile.tbl[i,c("region.dim.y","region.dim.x")]), output.dim=unlist(tile.tbl[i,c("region.dim.y","region.dim.x")]), silent = TRUE)$band1
+      m$desert = ifelse(is.na(m$desert), 0, m$desert)
+      ## NO need to predict for permanent snow / shifting sands:
+      m = as(m, "SpatialPixelsDataFrame")
+      sel.p = !(m$landcover==220 | m$landcover==210 | m$desert==1)
+      m = m[sel.p,]
+    }
+    for(j in 1:length(n.tif)){
+      if(from.tile==TRUE){
+        m@data[,file_path_sans_ext(basename(n.tif[j]))] <- readGDAL(paste0(out.path, "/T", tile.tbl[i,"ID"], "/", strsplit(basename(n.tif[j]),"_")[[1]][3], "_T", tile.tbl[i,"ID"], ".tif"), silent = TRUE)$band1[m@grid.index]
+      } else {
+        m@data[,file_path_sans_ext(basename(n.tif[j]))] <- readGDAL(fname=n.tif[j], offset=unlist(tile.tbl[i,c("offset.y","offset.x")]), region.dim=unlist(tile.tbl[i,c("region.dim.y","region.dim.x")]), output.dim=unlist(tile.tbl[i,c("region.dim.y","region.dim.x")]), silent = TRUE)$band1[m@grid.index]
+      }
+    }
+    names(m) = gsub("-", "_", names(m))
+    if(from.tile==FALSE){
+      names(m) = gsub("_1km", "", names(m))
+    }
+    if(any(names(m) %in% lc.name)){
+      m@data[,lc.name] = as.factor(m@data[,lc.name])
+      for(k in lc.class){
+        m@data[,paste0(lc.name,k)] <- ifelse(m@data[,lc.name]==k, 1, 0) 
+      }
+    }
+    ## Fill-in missing values (if necessary):
+    sel.mis = sapply(m@data, function(x){sum(is.na(x))>0})
+    if(sum(sel.mis)>0){
+      for(j in which(sel.mis)){
+        if(length(grep(pattern="USG5", names(m)[j]))>0){ 
+          repn = 0 
+        } else {
+          repn = quantile(m@data[,j], probs=.5, na.rm=TRUE)
+          if(is.na(repn)){
+            repn = quantile(reg.m[,grep(names(m)[j], names(reg.m))], probs=.5, na.rm=TRUE)
+          }
+        }
+        m@data[,j] = ifelse(is.na(m@data[,j]), repn, m@data[,j])
+      }
+    }
+    if(nrow(m)>2){
+      if(is.null(gmX)){ 
+        m$SOCS_m = predict(gmF, m@data)$predictions*10
+        writeGDAL(m["SOCS_m"], out.tif, type="Int16", mvFlag=-32768, options="COMPRESS=DEFLATE")
+      } else {
+        ## Weighted mean / ensemble prediction (in tonnes / ha):
+        if(missing(gmF.w)){ gmF.w = 1/gmF$prediction.error }
+        if(missing(gmF.w)){ gmX.w = 1/(min(gmX$results$RMSE, na.rm=TRUE)^2) }
+        m@data = data.frame(Reduce("+", list(predict(gmF, m@data)$predictions*gmF.w, predict(gmX, m@data)*gmX.w)) / (gmF.w+gmX.w)) * 10
+        m@data[,1] <- ifelse(m@data[,1] < 0, 0, m@data[,1])
+        writeGDAL(m[1], out.tif, type="Int16", mvFlag=-32768, options="COMPRESS=DEFLATE")
+      }
+      gc()
+    }
+  }
+}
+
+
+## Potential SOCS assuming potential vegetation
+predict_potSOCS_tiles = function(i, tile.tbl, n.tif, out.path="/data/WHRC_soilcarbon/model10km/tiled", varn="OCS_0_100cm_PNV", pnv.df){
+  out.tif <- paste0(out.path, "/T", tile.tbl[i,"ID"], "/", varn, "_T", tile.tbl[i,"ID"], ".tif")
+  if(!file.exists(out.tif)){
+    m = readGDAL(paste0(out.path, "/T", tile.tbl[i,"ID"], "/", strsplit(basename(n.tif[1]),"_")[[1]][3], "_T", tile.tbl[i,"ID"], ".tif"), silent = TRUE)
+    m = as(m, "SpatialPixelsDataFrame")
+    names(m) = file_path_sans_ext(basename(n.tif[1]))
+    for(j in 2:length(n.tif)){
+      m@data[,file_path_sans_ext(basename(n.tif[j]))] <- readGDAL(paste0(out.path, "/T", tile.tbl[i,"ID"], "/", strsplit(basename(n.tif[j]),"_")[[1]][3], "_T", tile.tbl[i,"ID"], ".tif"), silent = TRUE)$band1[m@grid.index]
+    }
+    ## multiply by class centers (weighted average):
+    m$SOCS_m = rowSums(t(t(m@data[,pnv.df$Biome_class]) * pnv.df$SOCS_m), na.rm=TRUE)/10
+    writeGDAL(m["SOCS_m"], out.tif, type="Int16", mvFlag=-32768, options="COMPRESS=DEFLATE")
+    gc()
+  }
+}
+
+## aggregate per class / tile
+summary_OCS_tiles <- function(i, tileS.tbl, out.path="./Stiled", lcs1="ESACCI_LC_L4_LCCS_2010_1km_sin.tif", sg1="OCS_0_100cm_current_1km_sin.tif", sg2="OCS_0_100cm_PNV_1km_sin.tif", cnt="GAUL_COUNTRIES_1km_sin.tif", lc.leg, countries, AREA = (1000*1000)/1e4){
+  out.csv = paste0(out.path, "/T", tileS.tbl[i,"ID"], "/",c("SOCS_current_agg_LC2010","SOCS_PNV_agg_LC2010"),"_T", tileS.tbl[i,"ID"], ".csv") ## "SOCS_historic_agg_LC2010"
+  out.tif = paste0(out.path, "/T", tileS.tbl[i,"ID"], "/OCS_0_100cm_",c("current","PNV"),"_T", tileS.tbl[i,"ID"], ".tif")
+  if(any(!file.exists(out.csv))){
+    m = readGDAL(fname=lcs1, offset=unlist(tileS.tbl[i,c("offset.y","offset.x")]), region.dim=unlist(tileS.tbl[i,c("region.dim.y","region.dim.x")]), output.dim=unlist(tileS.tbl[i,c("region.dim.y","region.dim.x")]), silent = TRUE)
+    lst = list(sg1,sg2,cnt)
+    for(j in 1:length(lst)){
+      m@data[,j+1] = readGDAL(fname=lst[[j]], offset=unlist(tileS.tbl[i,c("offset.y","offset.x")]), region.dim=unlist(tileS.tbl[i,c("region.dim.y","region.dim.x")]), output.dim=unlist(tileS.tbl[i,c("region.dim.y","region.dim.x")]), silent = TRUE)$band1
+    }
+    names(m) = c("LC2010","mSOCS_current","mSOCS_PNV","GAUL_COUNTRY")
+    m = as(m, "SpatialPixelsDataFrame")
+    m$LC2010 = factor(m$LC2010, levels=as.character(lc.leg$Value), labels=levels(lc.leg$NAME))
+    m$GAUL_COUNTRY = factor(m$GAUL_COUNTRY, levels=as.character(1:nrow(countries)), labels=levels(countries$NAMES))
+    m = m[!is.na(m$GAUL_COUNTRY),]
+    saveRDS(m, paste0(out.path, "/T", tileS.tbl[i,"ID"], "/stacked_T", tileS.tbl[i,"ID"], ".rds"))
+    writeGDAL(m["mSOCS_current"], out.tif[1], type="Int16", mvFlag=-32768, options="COMPRESS=DEFLATE")
+    writeGDAL(m["mSOCS_PNV"], out.tif[2], type="Int16", mvFlag=-32768, options="COMPRESS=DEFLATE")
+    ## Aggregate per country
+    SOC_agg.LC2010 <- plyr::ddply(m@data, .(LC2010), summarize, Total_OCS_current_t=round(sum(mSOCS_current*AREA, na.rm = TRUE)/1e6,2), Sum_OCS=sum(mSOCS_current, na.rm=TRUE), N_OCS=sum(!is.na(mSOCS_current)))
+    write.csv(SOC_agg.LC2010, out.csv[1])
+    SOC_agg.LC2010 <- plyr::ddply(m@data, .(LC2010), summarize, Total_OCS_PNV_t=round(sum(mSOCS_PNV*AREA, na.rm = TRUE)/1e6,2), Sum_OCS=sum(mSOCS_PNV, na.rm=TRUE), N_OCS=sum(!is.na(mSOCS_PNV)))
+    write.csv(SOC_agg.LC2010, out.csv[2])
+  }
+}
+
+MRT_resample = function(INPUT_FILENAME, OUTPUT_FILENAME, SPECTRAL_SUBSET="1", OUTPUT_PROJECTION_TYPE = "SIN", OUTPUT_PROJECTION_PARAMETERS = "6371007.181 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0", RESAMPLING_TYPE = "BILINEAR", SPATIAL_SUBSET_UL_CORNER, SPATIAL_SUBSET_LR_CORNER, PIXEL_SIZE, MRT = '/data/MRT/MRT/bin/'){
+  ## generate the prm file:
+  prm = set.file.extension(INPUT_FILENAME, ".prm")
+  filename = file(prm, open="wt")
+  write(paste0('INPUT_FILENAME = \"', INPUT_FILENAME, '\"'), filename)
+  write(paste0('SPECTRAL_SUBSET = (', SPECTRAL_SUBSET,')'), filename)
+  write(paste0('SPATIAL_SUBSET_TYPE = INPUT_LAT_LONG'), filename)
+  write(paste0('SPATIAL_SUBSET_UL_CORNER = (', paste0(SPATIAL_SUBSET_UL_CORNER, collapse=" "),')'), filename)
+  write(paste0('SPATIAL_SUBSET_LR_CORNER = (', paste0(SPATIAL_SUBSET_LR_CORNER, collapse=" "),')'), filename)
+  write(paste0('OUTPUT_FILENAME = \"', OUTPUT_FILENAME, '\"'), filename)
+  write(paste0('RESAMPLING_TYPE = ', RESAMPLING_TYPE), filename)
+  write(paste0('OUTPUT_PROJECTION_TYPE = ', OUTPUT_PROJECTION_TYPE), filename)
+  ## -t projection_type [AEA ER GEO HAM IGH ISIN LA LCC MERCAT MOL PS SIN TM UTM]
+  write(paste0('OUTPUT_PROJECTION_PARAMETERS = (', OUTPUT_PROJECTION_PARAMETERS, ')'), filename)
+  write(paste0('DATUM = NoDatum'), filename)
+  write(paste0('PIXEL_SIZE =  ', PIXEL_SIZE), filename)
+  close(filename)
+  system(paste0(MRT, 'resample -p ', prm))
+}
+
+latlon2sin = function(input.file, output.file, mod.grid, tmp.dir="./tmp/", proj, pixsize, cleanup.files=TRUE, te){
+  ## reproject grid in tiles:
+  out.files = paste0(tmp.dir, "T", mod.grid$ID, "_", basename(input.file))
+  te.lst = apply(mod.grid@data[,1:4], 1, function(x){paste(x, collapse=" ")})
+  if(missing(proj)){ proj = "+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +a=6371007.181 +b=6371007.181 +units=m +no_defs" }
+  sfInit(parallel=TRUE, cpus=48)
+  sfExport("mod.grid", "te.lst", "proj", "out.files")
+  #sfLibrary(rgdal)
+  x <- sfClusterApplyLB(1:length(out.files), function(i){ invisible( system(paste0('gdalwarp ', input.file, ' ', out.files[i], ' -r \"near\" -t_srs \"', proj, '\" -tr ', pixsize, ' ', pixsize, ' -te ', te.lst[i]), show.output.on.console = FALSE, intern = TRUE) ) }) ## -co \"COMPRESS=DEFLATE\"
+  sfStop()
+  ## mosaic:
+  tmp.lst = list.files(path=tmp.dir, pattern=basename(input.file), full.names=TRUE)
+  out.tmp <- tempfile(fileext = ".txt")
+  vrt.tmp <- tempfile(fileext = ".vrt")
+  cat(tmp.lst, sep="\n", file=out.tmp)
+  system(paste0(gdalbuildvrt, ' -input_file_list ', out.tmp, ' ', vrt.tmp))
+  if(missing(te)){
+    system(paste0(gdalwarp, ' ', vrt.tmp, ' ', output.file, ' -ot \"Int16\" -dstnodata \"-32767\" -co \"BIGTIFF=YES\" -multi -wm 2000 -co \"COMPRESS=DEFLATE\" -r \"near\"'))
+  } else {
+    system(paste0(gdalwarp, ' ', vrt.tmp, ' ', output.file, ' -ot \"Int16\" -dstnodata \"-32767\" -co \"BIGTIFF=YES\" -multi -wm 2000 -co \"COMPRESS=DEFLATE\" -r \"near\" -te ', te))
+  }
+  if(cleanup.files==TRUE){ unlink(out.files) }
+}
