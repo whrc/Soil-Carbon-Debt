@@ -12,4 +12,4 @@ Raster files of predictions are organized by folder:
 
 Please cite as:
 
-* Sanderman, J., Hengl, T., Fiske, G., 2017? **"The soil carbon debt of 12,000 years of human land use"**, sumbitted to PNAS.
+* Sanderman, J., Hengl, T., Fiske, G., 2017? **"The soil carbon debt of 12,000 years of human land use"**, submitted to PNAS.
