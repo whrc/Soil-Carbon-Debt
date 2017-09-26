@@ -478,7 +478,7 @@ for(j in 1:length(periods)){
 }
 
 ## Derive cumulative SOCS for 0-2 m:
-sum_SOCS = function(tif.lst, depthT = c(30,60,100), year, depth.sel=200){
+sum_SOCS = function(tif.lst, depthT = c(30,70,100), year, depth.sel=200){
   out.tif = paste0("SOCS_0_", depth.sel, "cm_year_", year, "_10km.tif")
   s = stack(tif.lst)
   s = as(s, "SpatialGridDataFrame")
