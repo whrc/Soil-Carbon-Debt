@@ -1,7 +1,7 @@
 ## Derivation of potential soil carbon (https://github.com/whrc/Soil-Carbon-Debt)
 ## Code by: Tom.Hengl@isric.org
 ## Contributions by: J. (Jon) Sanderman (WHRC) and G. (Greg) Fiske (WHRC)
-## Cite as: Sanderman, J., Hengl, T., Fiske, G., 2017? "The soil carbon debt of 12,000 years of human land use", sumbitted to PNAS.
+## Cite as: Sanderman, J., Hengl, T., Fiske, G., 2017? "The soil carbon debt of 12,000 years of human land use", sumbitted to PNAS. http://dx.doi.org/10.1073/pnas.1706103114
 
 list.of.packages <- c("raster", "rgdal", "nnet", "plyr", "ROCR", "randomForest", "R.utils", "plyr", "parallel", "psych", "mda", "dismo", "snowfall", "hexbin", "lattice", "ranger", "xgboost", "doParallel", "caret", "plotKML", "GSIF")
 new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
@@ -320,7 +320,7 @@ ovRND = ovRND[!is.na(ovRND$MASK),]
 sel.na <- colSums(sapply(ovRND, function(x){!is.na(x)}))
 sel.na[which(sel.na<1000)]
 
-## 1. Historic soil organic carbon stock  -----------
+## 1. Historic soil organic carbon stock  ----
 ## modelled using point data
 ## m.OCS = f ( climate, relief, surface geology, land cover )
 
@@ -421,7 +421,7 @@ mrfX
 mgbX
 ## 45%
 
-## Predict OCD values using current and past climate/land cover/land use
+## Predict OCD values using current and past climate/land cover/land use ----
 cfc.levs = levels(ovMC2$cfc_gen_10km)
 
 predict_e <- function(mrfX, mgbX=NULL, newdata, cfc.levs, depth=100){
@@ -477,7 +477,7 @@ for(j in 1:length(periods)){
   }
 }
 
-## Derive cumulative SOCS for 0-2 m:
+## Derive cumulative SOCS for 0-2 m ----
 sum_SOCS = function(tif.lst, depthT = c(30,70,100), year, depth.sel=200){
   out.tif = paste0("SOCS_0_", depth.sel, "cm_year_", year, "_10km.tif")
   s = stack(tif.lst)
@@ -545,7 +545,7 @@ abline(h=1:25, lty=2, col="grey")
 axis(2, at=1:25, labels=rev(c("Max. temp. September", "Max. temp. August", "MCF October", "MCF December", "Elevation", "MCF September", "MCF January", "MCF November", "Max. temp. October", "MCF June", "Wetness Index", "MCF May", "MCF July", "MCF February", "MCF March", "MCF August", "MCF April", "Snow prob. March", "Precipitation October", expression(bold("Grazing (HYDE)")), "Max. temp. April", "Hillands class", expression(bold("Cropland (HYDE)")), "Max. temp. February", expression(bold("Total rainfed (HYDE)")))), las=2)
 dev.off()
 
-## plot 1 to 1 relationships -----
+## Plot 1 to 1 relationships ----
 library(scales)
 library(hexbin)
 pfun <- function(x,y, ...){
@@ -612,7 +612,7 @@ hist(ratioOCS[ratioOCS<300 & ratioOCS>0 & !is.na(ratioOCS)], breaks=seq(0,300,by
 quantile(ratioOCS[ratioOCS<300 & ratioOCS>0 & !is.na(ratioOCS)], c(.1,.9))
 mean(ratioOCS[ratioOCS<450 & ratioOCS>0 & !is.na(ratioOCS)])
 
-## Prediction error for RF -----
+## Prediction error for RF ----
 ## based on an empirical solution explained in: https://github.com/imbs-hl/ranger/issues/136
 
 predict_cv_resid = function(formulaString, data, nfold, coords=c("LONWGS84", "LATWGS84")){
@@ -660,3 +660,24 @@ for(d in c(0,30,100,200)){
 
 ## All covariates:
 #system("7za a SOCS_global_Covariates_10km.7z ./stacked/*.tif")
+
+## Derive total soil organic carbon stock in Pg ----
+## Convert maps to Equal area projection (http://geoawesomeness.com/best-map-projection/) e.g. Sinusoidal or the Eckert IV projection:
+system('gdalwarp ./SOCS/SOCS_0_100cm_year_2010AD_10km.tif ./SOCS/SOCS_0_100cm_year_2010AD_10km_sin.tif -t_srs \"+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +units=m +no_defs\" -tr 10000 10000 -co \"COMPRESS=DEFLATE\"')
+grid10km.sin = readGDAL("./SOCS/SOCS_0_100cm_year_2010AD_10km_sin.tif")
+summary(grid10km.sin$band1)
+## Total stock in Pg:
+round(sum(grid10km.sin$band1*1e4^2/1e4, na.rm=TRUE)/1e9)
+## [1] 3013
+system('gdalwarp ./SOCS/SOCS_0_30cm_year_2010AD_10km.tif ./SOCS/SOCS_0_30cm_year_2010AD_10km_sin.tif -t_srs \"+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +units=m +no_defs\" -tr 10000 10000 -co \"COMPRESS=DEFLATE\"')
+grid10km.sin$ocs30cm = readGDAL("./SOCS/SOCS_0_30cm_year_2010AD_10km_sin.tif")$band1
+round(sum(grid10km.sin$ocs30cm*1e4^2/1e4, na.rm=TRUE)/1e9)
+## [1] 1824
+
+## Check the Eckert projection:
+system('gdalwarp ./SOCS/SOCS_0_100cm_year_2010AD_10km.tif ./SOCS/SOCS_0_100cm_year_2010AD_10km_gp.tif -t_srs \"+proj=eck4 +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs\" -tr 10000 10000 -co \"COMPRESS=DEFLATE\"')
+#plot(raster("./SOCS/SOCS_0_100cm_year_2010AD_10km_gp.tif"))
+grid10km.gp = readGDAL("./SOCS/SOCS_0_100cm_year_2010AD_10km_gp.tif")
+## Total stock in Pg:
+round(sum(grid10km.gp$band1*1e4^2/1e4, na.rm=TRUE)/1e9)
+## [1] 3013
