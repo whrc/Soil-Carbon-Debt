@@ -478,31 +478,31 @@ for(j in 1:length(periods)){
 }
 
 ## Derive cumulative SOCS for 0-2 m ----
-sum_SOCS = function(tif.lst, depthT = c(30,70,100), year, depth.sel=200){
-  out.tif = paste0("SOCS_0_", depth.sel, "cm_year_", year, "_10km.tif")
-  s = stack(tif.lst)
+sum_SOCS = function(tifs, depthT = c(30,70,100), year, depth.sel=200){
+  out.tif = paste0("./SOCS/SOCS_0_", c(depthT[1], sum(depthT[1:2]), sum(depthT[1:3])), "cm_year_", year, "_10km.tif")
+  s = stack(tifs)
   s = as(s, "SpatialGridDataFrame")
   for(i in 1:ncol(s)){ s@data[,i] = ifelse(s@data[,i]<0, 0, s@data[,i]) }
   x = list(NULL)
-  for(i in 1:(length(tif.lst)-1)){
+  for(i in 1:(length(tifs)-1)){
     x[[i]] = rowMeans(s@data[,i:(i+1)], na.rm=TRUE)*depthT[i]/100 
   }
-  for(k in 1:length(depth.sel)){
-    if(depth.sel[k]==200){
+  for(k in 1:length(depthT)){
+    if(depthT[k]==100){
       s$SOCS = rowSums(as.data.frame(x[1:3]), na.rm=TRUE)
     }
-    if(depth.sel[k]==100){
+    if(depthT[k]==70){
       s$SOCS = rowSums(as.data.frame(x[1:2]), na.rm=TRUE)
     }
-    if(depth.sel[k]==30){
+    if(depthT[k]==30){
       s$SOCS = rowSums(as.data.frame(x[1]), na.rm=TRUE)
     }
     ## tones / ha
-    writeGDAL(s["SOCS"], out.tif[k], type="Int16", mvFlag=0, options="COMPRESS=DEFLATE")
+    writeGDAL(s["SOCS"], out.tif[k], type="Int16", mvFlag=-32767, options="COMPRESS=DEFLATE")
   }
 }
 
-tif.lst <- lapply(periods, function(x){paste0("OCD_",c(0,30,100,200),"cm_year_",x,"_10km.tif")})
+tif.lst <- lapply(periods, function(x){paste0("./OCD/OCD_",c(0,30,100,200),"cm_year_",x,"_10km.tif")})
 sfInit(parallel=TRUE, cpus=length(periods))
 sfLibrary(raster)
 sfLibrary(rgdal)
@@ -515,7 +515,7 @@ sum_SOCS(tif.lst[[1]], year=periods[1], depth.sel=c(30,100,200))
 sum_SOCS(tif.lst[[7]], year=periods[7], depth.sel=c(30,100,200))
 
 ## plot difference:
-SOC_10km = stack(c("SOCS_0_200cm_year_NoLU_10km.tif","SOCS_0_200cm_year_2016AD_10km.tif"))
+SOC_10km = stack(c("./SOCS/SOCS_0_200cm_year_NoLU_10km.tif","./SOCS/SOCS_0_200cm_year_2016AD_10km.tif"))
 SOC_10km = as(SOC_10km, "SpatialGridDataFrame")
 #plot(stack(SOC_10km))
 SOC_10km$dif = (SOC_10km@data[,1]-SOC_10km@data[,2])
@@ -668,11 +668,11 @@ grid10km.sin = readGDAL("./SOCS/SOCS_0_100cm_year_2010AD_10km_sin.tif")
 summary(grid10km.sin$band1)
 ## Total stock in Pg:
 round(sum(grid10km.sin$band1*1e4^2/1e4, na.rm=TRUE)/1e9)
-## [1] 3013
+## [1] 1985
 system('gdalwarp ./SOCS/SOCS_0_30cm_year_2010AD_10km.tif ./SOCS/SOCS_0_30cm_year_2010AD_10km_sin.tif -t_srs \"+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +units=m +no_defs\" -tr 10000 10000 -co \"COMPRESS=DEFLATE\"')
 grid10km.sin$ocs30cm = readGDAL("./SOCS/SOCS_0_30cm_year_2010AD_10km_sin.tif")$band1
 round(sum(grid10km.sin$ocs30cm*1e4^2/1e4, na.rm=TRUE)/1e9)
-## [1] 1824
+## [1] 863
 
 ## Check the Eckert projection:
 system('gdalwarp ./SOCS/SOCS_0_100cm_year_2010AD_10km.tif ./SOCS/SOCS_0_100cm_year_2010AD_10km_gp.tif -t_srs \"+proj=eck4 +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs\" -tr 10000 10000 -co \"COMPRESS=DEFLATE\"')
@@ -680,4 +680,4 @@ system('gdalwarp ./SOCS/SOCS_0_100cm_year_2010AD_10km.tif ./SOCS/SOCS_0_100cm_ye
 grid10km.gp = readGDAL("./SOCS/SOCS_0_100cm_year_2010AD_10km_gp.tif")
 ## Total stock in Pg:
 round(sum(grid10km.gp$band1*1e4^2/1e4, na.rm=TRUE)/1e9)
-## [1] 3013
+## [1] 1986
