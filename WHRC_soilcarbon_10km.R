@@ -95,10 +95,6 @@ GDALinfo("cru_wet_clim_1961-1990_01.tif")
 GDALinfo("cru_cld_clim_1961-1990_01.tif")
 GDALinfo("cru_dtr_clim_1961-1990_01.tif")
 ## Missing value flags are incorrect?
-gdalwarp_clim <- function(x, srcnodata = "254", dstnodata = "255"){
-  out = paste0("./stacked/", gsub(".tif", "_10km.tif", basename(x)))
-  if(!file.exists(out)){ system(paste0(gdalwarp, ' ', x, ' ', out, ' -srcnodata \"', srcnodata,'\" -dstnodata \"', dstnodata,'\" -co \"COMPRESS=DEFLATE\" -r \"cubicspline\" -tr ', cellsize, ' ', cellsize))} ##  -t_srs \"+proj=longlat +datum=WGS84\" ' -te ', xllcorner,' ', yllcorner, ' ', xurcorner, ' ', yurcorner
-}
 #unlink(paste0("./stacked/", gsub(".tif", "_10km.tif", basename(cl.lst[1]))))
 #gdalwarp_clim(cl.lst[1])
 ## resample to 10 km resolution:
@@ -135,14 +131,6 @@ pp.zip.lst <- list.files(path="./intact", pattern = glob2rx("*.zip$"), full.name
 sapply(pp.zip.lst, function(x){system(paste("7za x ", x," -r -y"))})
 ogrInfo("WDPA_Apr2016-shapefile-polygons.shp", "WDPA_Apr2016-shapefile-polygons")
 ogrInfo("ifl_2013.shp", "ifl_2013")
-## rasterize:
-rasterize_pol <- function(INPUT, FIELD, cellsize, xllcorner, yllcorner, xurcorner, yurcorner){
-  out = paste0(strsplit(basename(INPUT), "\\.")[[1]][1], ".sdat")
-  ## "./stacked10km/", 
-  if(!file.exists(out)){
-    system(paste0('/usr/bin/saga_cmd -c=48 grid_gridding 0 -INPUT \"', INPUT, '\" -FIELD \"', FIELD, '\" -GRID \"', gsub(".sdat", ".sgrd", out), '\" -GRID_TYPE 0 -TARGET_DEFINITION 0 -TARGET_USER_SIZE ', cellsize, ' -TARGET_USER_XMIN ', xllcorner+cellsize/2,' -TARGET_USER_XMAX ', xurcorner-cellsize/2, ' -TARGET_USER_YMIN ', yllcorner+cellsize/2,' -TARGET_USER_YMAX ', yurcorner-cellsize/2))
-  }
-}
 shp.lst = c("WDPA_Apr2016-shapefile-polygons.shp", "ifl_2013.shp", "ifl_2000.shp")
 field.lst = c("STATUS_YR","IFL_ID","IFL_ID")
 x = sapply(1:length(shp.lst), function(x){rasterize_pol(INPUT=shp.lst[x], FIELD=field.lst[x], cellsize, xllcorner, yllcorner, xurcorner, yurcorner)})
@@ -175,15 +163,6 @@ sapply(hyde.lst, function(x){system(paste("7za e ", x," -r -y"))})
 cropland.lst <- list.files(pattern = glob2rx("cropland*.asc$"), full.names = TRUE) 
 ## 74 slices
 cropland.tbl <- data.frame(filename=cropland.lst)
-## function to strip year:
-strip_year = function(x, name, ext=".asc"){
-  xn = sapply(paste(x), function(x){strsplit(strsplit(x, name)[[1]][2], ext)[[1]][1]})
-  xi = rep(NA, length(xn))
-  xi[grep("AD", xn)] <- as.numeric( sapply(paste(xn[grep("AD", xn)]), function(x){strsplit(x, "AD")[[1]][1]}) )
-  xi[grep("BC", xn)] <- -as.numeric( sapply(paste(xn[grep("BC", xn)]), function(x){strsplit(x, "BC")[[1]][1]}) )
-  return(xi)
-}
-
 cropland.tbl$Year <- strip_year(cropland.tbl$filename, name="cropland")
 cropland.tbl <- cropland.tbl[order(cropland.tbl$Year),]
 pasture.lst <- list.files(pattern = glob2rx("pasture*.asc$"), full.names = TRUE)
@@ -191,18 +170,6 @@ pasture.tbl <- data.frame(filename=pasture.lst)
 pasture.tbl$Year <- strip_year(pasture.tbl$filename, name="pasture")
 pasture.tbl <- pasture.tbl[order(pasture.tbl$Year),]
 
-#library(animation)
-plot_world10km <- function(i, tbl){
-  out.file = paste0(tbl[i,"filename"], ".png")
-  if(!file.exists(out.file)){
-    png(file = out.file, width = 4320/2, height = 2160/2, type="cairo")
-    par(mar=c(0,0,0,0), oma=c(0,0,0,0))
-    image(raster(paste(tbl[i,"filename"])), asp=1, col=c(SAGA_pal[["SG_COLORS_YELLOW_RED"]], rep("#BF0000",20)), zlim=c(0,100))
-    text(-65, paste(tbl[i,"Year"]), cex=6)
-    lines(country, col="black")
-    dev.off()
-  }
-}
 ## Create animation:
 sapply(1:nrow(cropland.tbl), plot_world10km, cropland.tbl)
 system(paste0('convert -delay 100 ', paste(gsub(".asc", ".asc.png", cropland.tbl$filename), collapse=" "), ' cropland_historic_Hyde.gif'))
@@ -424,28 +391,6 @@ mgbX
 ## Predict OCD values using current and past climate/land cover/land use ----
 cfc.levs = levels(ovMC2$cfc_gen_10km)
 
-predict_e <- function(mrfX, mgbX=NULL, newdata, cfc.levs, depth=100){
-  sel.comp = complete.cases(newdata@data) & !is.na(newdata$MASK)
-  nc = which(names(newdata)=="ofc_gen_10km")
-  if(length(nc)>0){ names(newdata)[nc] = "cfc_gen_10km" }
-  for(k in cfc.levs){
-    newdata@data[,paste0("cfc_gen_10km",k)] = ifelse(newdata@data[,"cfc_gen_10km"]==k, 1, 0)
-  }
-  newdata$DEPTH.f = depth
-  v1 <- predict(mrfX, newdata@data[sel.comp,])$predictions
-  m <- newdata["cfc_gen_10km"]
-  m <- as(m, "SpatialPixelsDataFrame")
-  if(!is.null(mgbX)){
-    gm1.w = 1/mrfX$prediction.error
-    gm2.w = 1/(min(mgbX$results$RMSE, na.rm=TRUE)^2)
-    v2 <- predict(mgbX, newdata@data[sel.comp,])
-    m@data[sel.comp,"predicted"] <- data.frame(Reduce("+", list(v1*gm1.w, v2*gm2.w)) / (gm1.w+gm2.w))*10 ## 10 x kg/m-cubic
-  } else {
-    m@data[sel.comp,"predicted"] <- v1
-  }
-  return(m["predicted"])
-}
-
 DepthI = c(0,30,100,200)
 unlink(list.files(pattern=glob2rx(paste0("OCD_", DepthI, "cm_year_*_10km.tif$"))))
 #mrfX = readRDS.gz(file="mrf.OCD_2010.rds")
@@ -478,31 +423,8 @@ for(j in 1:length(periods)){
 }
 
 ## Derive cumulative SOCS for 0-2 m ----
-sum_SOCS = function(tifs, depthT = c(30,70,100), year, depth.sel=200){
-  out.tif = paste0("./SOCS/SOCS_0_", c(depthT[1], sum(depthT[1:2]), sum(depthT[1:3])), "cm_year_", year, "_10km.tif")
-  s = stack(tifs)
-  s = as(s, "SpatialGridDataFrame")
-  for(i in 1:ncol(s)){ s@data[,i] = ifelse(s@data[,i]<0, 0, s@data[,i]) }
-  x = list(NULL)
-  for(i in 1:(length(tifs)-1)){
-    x[[i]] = rowMeans(s@data[,i:(i+1)], na.rm=TRUE)*depthT[i]/100 
-  }
-  for(k in 1:length(depthT)){
-    if(depthT[k]==100){
-      s$SOCS = rowSums(as.data.frame(x[1:3]), na.rm=TRUE)
-    }
-    if(depthT[k]==70){
-      s$SOCS = rowSums(as.data.frame(x[1:2]), na.rm=TRUE)
-    }
-    if(depthT[k]==30){
-      s$SOCS = rowSums(as.data.frame(x[1]), na.rm=TRUE)
-    }
-    ## tones / ha
-    writeGDAL(s["SOCS"], out.tif[k], type="Int16", mvFlag=-32767, options="COMPRESS=DEFLATE")
-  }
-}
-
 tif.lst <- lapply(periods, function(x){paste0("./OCD/OCD_",c(0,30,100,200),"cm_year_",x,"_10km.tif")})
+source("WHRC_functions.R")
 sfInit(parallel=TRUE, cpus=length(periods))
 sfLibrary(raster)
 sfLibrary(rgdal)
@@ -513,6 +435,18 @@ sfStop()
 ## for NoLU and 2010:
 sum_SOCS(tif.lst[[1]], year=periods[1], depth.sel=c(30,100,200))
 sum_SOCS(tif.lst[[7]], year=periods[7], depth.sel=c(30,100,200))
+
+## Clean-up coastline offset pixels ----
+## All maps should refer to the same land mask:
+OCS.lst = list.files("./SOCS", pattern=glob2rx("*10km.tif$"), full.names = TRUE)
+for(k in c("900AD","1800AD","1910AD","1960AD","1990AD","2010AD")) { landmask_fix(OCS.lst, s.year = k) }
+## And also mask out 0 values in noLandUse:
+for(i in c("30cm","100cm","200cm")){
+  s = raster::stack(c(paste0("./SOCS/SOCS_0_",i,"_year_NoLU_10km.tif"), "./OCD/landmask_10km.tif"))
+  s = as(s, "SpatialGridDataFrame")
+  s@data[,"fix"] = ifelse(is.na(s$landmask_10km), NA, s@data[,1])
+  writeGDAL(s["fix"], paste0("./SOCS/SOCS_0_",i,"_year_NoLU_10km.tif"), type="Int16", mvFlag=-32767, options="COMPRESS=DEFLATE")
+}
 
 ## plot difference:
 SOC_10km = stack(c("./SOCS/SOCS_0_200cm_year_NoLU_10km.tif","./SOCS/SOCS_0_200cm_year_2016AD_10km.tif"))
@@ -615,28 +549,6 @@ mean(ratioOCS[ratioOCS<450 & ratioOCS>0 & !is.na(ratioOCS)])
 ## Prediction error for RF ----
 ## based on an empirical solution explained in: https://github.com/imbs-hl/ranger/issues/136
 
-predict_cv_resid = function(formulaString, data, nfold, coords=c("LONWGS84", "LATWGS84")){
-  data <- data[complete.cases(data[,all.vars(formulaString)]),]
-  ## only one point per profile to avoid auto-correlation problems
-  sel <- dismo::kfold(data, k=nfold, by=data$SOURCEID)
-  out = list(NULL)
-  for(j in 1:nfold){
-    s.train <- data[!sel==j,]
-    s.test <- data[sel==j,]
-    m <- ranger(formulaString, data=s.train, write.forest=TRUE)
-    pred <- predict(m, s.test, na.action = na.pass)$predictions
-    obs.pred <- as.data.frame(list(s.test[,all.vars(formulaString)[1]], pred))
-    names(obs.pred) = c("Observed", "Predicted")
-    obs.pred[,"ID"] <- row.names(s.test)
-    obs.pred$fold = j
-    obs.pred[,coords] = s.test[,coords]
-    out[[j]] = obs.pred
-  }
-  out <- plyr::rbind.fill(out)
-  out <- out[order(as.numeric(out$ID)),]
-  return(out)
-}
-
 ## TAKES 30 mins
 resid.OCDENS = predict_cv_resid(formulaString.OCD, data=ovMC2, nfold=4)
 #xyplot(Predicted~Observed, resid.OCDENS, asp=1, par.settings=list(plot.symbol = list(col=alpha("black", 0.6), fill=alpha("red", 0.6), pch=21, cex=0.9)), xlab="measured", ylab="predicted (ranger)")
@@ -663,21 +575,21 @@ for(d in c(0,30,100,200)){
 
 ## Derive total soil organic carbon stock in Pg ----
 ## Convert maps to Equal area projection (http://geoawesomeness.com/best-map-projection/) e.g. Sinusoidal or the Eckert IV projection:
-system('gdalwarp ./SOCS/SOCS_0_100cm_year_2010AD_10km.tif ./SOCS/SOCS_0_100cm_year_2010AD_10km_sin.tif -t_srs \"+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +units=m +no_defs\" -tr 10000 10000 -co \"COMPRESS=DEFLATE\"')
+system('gdalwarp ./SOCS/SOCS_0_100cm_year_2010AD_10km.tif ./SOCS/SOCS_0_100cm_year_2010AD_10km_sin.tif -t_srs \"+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +units=m +no_defs\" -tr 10000 10000 -co \"COMPRESS=DEFLATE\" -overwrite')
 grid10km.sin = readGDAL("./SOCS/SOCS_0_100cm_year_2010AD_10km_sin.tif")
 summary(grid10km.sin$band1)
 ## Total stock in Pg:
 round(sum(grid10km.sin$band1*1e4^2/1e4, na.rm=TRUE)/1e9)
-## [1] 1985
-system('gdalwarp ./SOCS/SOCS_0_30cm_year_2010AD_10km.tif ./SOCS/SOCS_0_30cm_year_2010AD_10km_sin.tif -t_srs \"+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +units=m +no_defs\" -tr 10000 10000 -co \"COMPRESS=DEFLATE\"')
+## [1] 1998
+system('gdalwarp ./SOCS/SOCS_0_30cm_year_2010AD_10km.tif ./SOCS/SOCS_0_30cm_year_2010AD_10km_sin.tif -t_srs \"+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +units=m +no_defs\" -tr 10000 10000 -co \"COMPRESS=DEFLATE\" -overwrite')
 grid10km.sin$ocs30cm = readGDAL("./SOCS/SOCS_0_30cm_year_2010AD_10km_sin.tif")$band1
 round(sum(grid10km.sin$ocs30cm*1e4^2/1e4, na.rm=TRUE)/1e9)
-## [1] 863
+## [1] 868
 
 ## Check the Eckert projection:
-system('gdalwarp ./SOCS/SOCS_0_100cm_year_2010AD_10km.tif ./SOCS/SOCS_0_100cm_year_2010AD_10km_gp.tif -t_srs \"+proj=eck4 +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs\" -tr 10000 10000 -co \"COMPRESS=DEFLATE\"')
+system('gdalwarp ./SOCS/SOCS_0_100cm_year_2010AD_10km.tif ./SOCS/SOCS_0_100cm_year_2010AD_10km_gp.tif -t_srs \"+proj=eck4 +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs\" -tr 10000 10000 -co \"COMPRESS=DEFLATE\" -overwrite')
 #plot(raster("./SOCS/SOCS_0_100cm_year_2010AD_10km_gp.tif"))
 grid10km.gp = readGDAL("./SOCS/SOCS_0_100cm_year_2010AD_10km_gp.tif")
 ## Total stock in Pg:
 round(sum(grid10km.gp$band1*1e4^2/1e4, na.rm=TRUE)/1e9)
-## [1] 1986
+## [1] 1999
